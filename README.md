@@ -20,3 +20,4 @@ Each file is named after its corresponding LeetCode problem:
 - Subqueries & CTEs
 - Window functions
 - String & date functions
+- NVL, Coalesce
