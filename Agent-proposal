@@ -1,0 +1,409 @@
+📡 Signal Bot — Stock/ETF Dashboard
+A Streamlit dashboard that analyzes stocks/ETFs and shows BUY / SELL / HOLD / WATCH signals with reasoning. Updates on a configurable interval.
+
+Setup
+bash# 1. Install dependencies
+pip install streamlit yfinance pandas numpy
+
+# 2. Run
+streamlit run trading_dashboard.py
+Opens at http://localhost:8501
+
+What it shows
+ColumnDescriptionTickerSymbol (VTI, SPY, etc.)SignalBUY / WATCH / HOLD / SELLPrice / ChangeCurrent price + daily % changeScore-5 to +5 bullish/bearish composite
+Expand any row for full analysis with all indicator values.
+
+Signal logic
+Each ticker gets a score from -5 to +5 based on:
+IndicatorBullishBearishRSI< 35 (oversold)> 70 (overbought)MACDBullish crossoverBearish crossoverBollinger BandsPrice near lower bandPrice near upper bandSMA 20/50Price > SMA20 > SMA50Price < SMA20 < SMA50VolumeHigh vol + up moveHigh vol + down move
+Score → Signal:
+
+≥ 3 → BUY
+1–2 → WATCH
+−1 to 0 → HOLD
+≤ −3 → SELL
+
+
+Adding tickers
+Edit WATCHLIST in the file, or type any ticker in the sidebar's "Add ticker" field at runtime.
+
+Data source
+yfinance — free, 15-min delayed for most tickers. Fetches 90 days of daily OHLCV data.
+
+Next steps to extend
+
+Add email/Telegram alerts when signal changes
+Add a backtest tab showing historical signal accuracy
+Connect to Alpaca paper trading to auto-execute BUY signals
+Add a portfolio tracker showing open positions
+"""
+Stock/ETF Signal Dashboard
+Run: streamlit run trading_dashboard.py
+Requires: pip install streamlit yfinance pandas numpy ta
+"""
+
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import time
+
+# ── Config ──────────────────────────────────────────────────────────────────
+
+WATCHLIST = ["VTI", "SPY", "QQQ", "ARKK", "GLD", "TLT", "AAPL", "MSFT"]
+REFRESH_SECONDS = 60  # how often to re-fetch (market data lags ~15 min on free tier)
+
+# ── Page setup ───────────────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Signal Bot",
+    page_icon="📡",
+    layout="wide",
+)
+
+st.markdown("""
+<style>
+    .block-container { padding-top: 1.5rem; }
+    .signal-buy    { color: #00c87a; font-weight: 700; font-size: 1.1rem; }
+    .signal-sell   { color: #ff4b4b; font-weight: 700; font-size: 1.1rem; }
+    .signal-hold   { color: #ffa500; font-weight: 700; font-size: 1.1rem; }
+    .signal-watch  { color: #888888; font-weight: 700; font-size: 1.1rem; }
+    .reason-text   { color: #aaaaaa; font-size: 0.82rem; }
+    .price-up      { color: #00c87a; }
+    .price-down    { color: #ff4b4b; }
+    .metric-label  { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .ticker-header { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.03em; }
+    hr { border-color: #2a2a2a; }
+    div[data-testid="stMetricValue"] { font-size: 1.1rem; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Technical analysis helpers ───────────────────────────────────────────────
+
+def compute_rsi(series: pd.Series, period: int = 14) -> float:
+    delta = series.diff().dropna()
+    gains = delta.clip(lower=0)
+    losses = -delta.clip(upper=0)
+    avg_gain = gains.ewm(com=period - 1, min_periods=period).mean().iloc[-1]
+    avg_loss = losses.ewm(com=period - 1, min_periods=period).mean().iloc[-1]
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+def compute_macd(series: pd.Series):
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return round(macd_line.iloc[-1], 4), round(signal_line.iloc[-1], 4), round(histogram.iloc[-1], 4)
+
+
+def compute_bollinger(series: pd.Series, period: int = 20):
+    sma = series.rolling(period).mean().iloc[-1]
+    std = series.rolling(period).std().iloc[-1]
+    upper = sma + 2 * std
+    lower = sma - 2 * std
+    price = series.iloc[-1]
+    pct_b = (price - lower) / (upper - lower) if (upper - lower) != 0 else 0.5
+    return round(upper, 2), round(sma, 2), round(lower, 2), round(pct_b, 3)
+
+
+def compute_sma(series: pd.Series, period: int) -> float:
+    return round(series.rolling(period).mean().iloc[-1], 2)
+
+
+def compute_atr(df: pd.DataFrame, period: int = 14) -> float:
+    high_low = df["High"] - df["Low"]
+    high_close = (df["High"] - df["Close"].shift()).abs()
+    low_close = (df["Low"] - df["Close"].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return round(tr.rolling(period).mean().iloc[-1], 2)
+
+
+# ── Signal engine ─────────────────────────────────────────────────────────────
+
+def generate_signal(df: pd.DataFrame) -> dict:
+    """
+    Returns a dict with keys:
+      signal: BUY | SELL | HOLD | WATCH
+      reasons: list of strings
+      score: int (-5 to +5, positive = bullish)
+      indicators: dict of computed values
+    """
+    close = df["Close"]
+    price = close.iloc[-1]
+
+    rsi = compute_rsi(close)
+    macd_val, macd_sig, macd_hist = compute_macd(close)
+    bb_upper, bb_mid, bb_lower, pct_b = compute_bollinger(close)
+    sma20 = compute_sma(close, 20)
+    sma50 = compute_sma(close, 50)
+    atr = compute_atr(df)
+
+    # Volume trend
+    avg_vol = df["Volume"].rolling(20).mean().iloc[-1]
+    last_vol = df["Volume"].iloc[-1]
+    vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
+
+    # Daily change
+    prev_close = close.iloc[-2] if len(close) > 1 else price
+    change_pct = ((price - prev_close) / prev_close) * 100
+
+    score = 0
+    reasons = []
+
+    # RSI signals
+    if rsi < 35:
+        score += 2
+        reasons.append(f"RSI {rsi} → oversold territory (below 35)")
+    elif rsi < 45:
+        score += 1
+        reasons.append(f"RSI {rsi} → approaching oversold")
+    elif rsi > 70:
+        score -= 2
+        reasons.append(f"RSI {rsi} → overbought territory (above 70)")
+    elif rsi > 60:
+        score -= 1
+        reasons.append(f"RSI {rsi} → approaching overbought")
+    else:
+        reasons.append(f"RSI {rsi} → neutral zone")
+
+    # MACD signals
+    if macd_hist > 0 and macd_val > macd_sig:
+        score += 1
+        reasons.append(f"MACD bullish crossover (hist: {macd_hist:+.4f})")
+    elif macd_hist < 0 and macd_val < macd_sig:
+        score -= 1
+        reasons.append(f"MACD bearish crossover (hist: {macd_hist:+.4f})")
+
+    # Bollinger Band signals
+    if pct_b < 0.1:
+        score += 2
+        reasons.append(f"Price near lower Bollinger Band (${bb_lower:.2f}) — mean reversion setup")
+    elif pct_b > 0.9:
+        score -= 2
+        reasons.append(f"Price near upper Bollinger Band (${bb_upper:.2f}) — potential reversal")
+    elif 0.4 < pct_b < 0.6:
+        reasons.append(f"Price at Bollinger midpoint — no edge")
+
+    # Moving average trend
+    if price > sma20 > sma50:
+        score += 1
+        reasons.append(f"Uptrend: price > SMA20 (${sma20}) > SMA50 (${sma50})")
+    elif price < sma20 < sma50:
+        score -= 1
+        reasons.append(f"Downtrend: price < SMA20 (${sma20}) < SMA50 (${sma50})")
+    elif sma20 > sma50:
+        reasons.append(f"SMA20 (${sma20}) above SMA50 (${sma50}) — mild bullish structure")
+
+    # Volume confirmation
+    if vol_ratio > 1.5 and change_pct > 0:
+        score += 1
+        reasons.append(f"High volume ({vol_ratio:.1f}x avg) confirms upward move")
+    elif vol_ratio > 1.5 and change_pct < 0:
+        score -= 1
+        reasons.append(f"High volume ({vol_ratio:.1f}x avg) confirms downward move")
+    else:
+        reasons.append(f"Volume normal ({vol_ratio:.1f}x 20d avg)")
+
+    # Determine signal from score
+    if score >= 3:
+        signal = "BUY"
+    elif score <= -3:
+        signal = "SELL"
+    elif score >= 1:
+        signal = "WATCH"
+    elif score <= -1:
+        signal = "HOLD"
+    else:
+        signal = "HOLD"
+
+    return {
+        "signal": signal,
+        "score": score,
+        "reasons": reasons,
+        "price": round(price, 2),
+        "change_pct": round(change_pct, 2),
+        "indicators": {
+            "RSI": rsi,
+            "MACD": macd_val,
+            "MACD Signal": macd_sig,
+            "BB %B": round(pct_b, 3),
+            "SMA20": sma20,
+            "SMA50": sma50,
+            "ATR": atr,
+            "Vol ratio": round(vol_ratio, 2),
+        },
+    }
+
+
+# ── Data fetching ────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=REFRESH_SECONDS)
+def fetch_data(ticker: str) -> pd.DataFrame | None:
+    try:
+        df = yf.download(ticker, period="90d", interval="1d", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 30:
+            return None
+        return df
+    except Exception:
+        return None
+
+
+# ── Rendering helpers ─────────────────────────────────────────────────────────
+
+SIGNAL_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡", "WATCH": "🔵"}
+SIGNAL_CLASS = {"BUY": "signal-buy", "SELL": "signal-sell", "HOLD": "signal-hold", "WATCH": "signal-watch"}
+
+
+def render_signal_card(ticker: str, result: dict):
+    sig = result["signal"]
+    price = result["price"]
+    chg = result["change_pct"]
+    score = result["score"]
+    reasons = result["reasons"]
+    indicators = result["indicators"]
+
+    chg_class = "price-up" if chg >= 0 else "price-down"
+    chg_arrow = "▲" if chg >= 0 else "▼"
+
+    with st.container():
+        col_ticker, col_signal, col_price, col_score = st.columns([2, 2, 2, 1])
+
+        with col_ticker:
+            st.markdown(f"<div class='ticker-header'>{ticker}</div>", unsafe_allow_html=True)
+
+        with col_signal:
+            st.markdown(
+                f"<div class='{SIGNAL_CLASS[sig]}'>{SIGNAL_EMOJI[sig]} {sig}</div>",
+                unsafe_allow_html=True,
+            )
+
+        with col_price:
+            st.markdown(
+                f"<div><b>${price}</b> &nbsp;<span class='{chg_class}'>{chg_arrow} {abs(chg):.2f}%</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        with col_score:
+            bar = "█" * abs(score) if score != 0 else "─"
+            color = "#00c87a" if score > 0 else "#ff4b4b" if score < 0 else "#888"
+            st.markdown(
+                f"<div style='color:{color};font-size:0.85rem'>{score:+d} &nbsp;{bar}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Reasons
+        with st.expander("Analysis", expanded=False):
+            for r in reasons:
+                icon = "↑" if any(w in r.lower() for w in ["bull", "oversold", "uptrend", "confirm"]) else \
+                       "↓" if any(w in r.lower() for w in ["bear", "overbought", "downtrend", "reversal"]) else "·"
+                st.markdown(f"<div class='reason-text'>{icon} {r}</div>", unsafe_allow_html=True)
+
+            st.markdown("---")
+            ind_cols = st.columns(4)
+            items = list(indicators.items())
+            for i, (k, v) in enumerate(items):
+                with ind_cols[i % 4]:
+                    st.markdown(f"<div class='metric-label'>{k}</div><div><b>{v}</b></div>", unsafe_allow_html=True)
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+
+# ── Main app ──────────────────────────────────────────────────────────────────
+
+def main():
+    # Header
+    col_title, col_time = st.columns([4, 1])
+    with col_title:
+        st.title("📡 Signal Bot")
+        st.caption("Mean reversion + momentum signals · Not financial advice")
+    with col_time:
+        st.markdown(f"<br><div style='text-align:right;color:#888'>{datetime.now().strftime('%H:%M:%S')}</div>",
+                    unsafe_allow_html=True)
+
+    # Sidebar controls
+    st.sidebar.header("Settings")
+    selected = st.sidebar.multiselect(
+        "Watchlist", WATCHLIST, default=WATCHLIST[:5]
+    )
+    custom = st.sidebar.text_input("Add ticker (comma separated)", "")
+    if custom:
+        for t in custom.upper().split(","):
+            t = t.strip()
+            if t and t not in selected:
+                selected.append(t)
+
+    auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True)
+    refresh_interval = st.sidebar.slider("Refresh interval (s)", 30, 300, REFRESH_SECONDS)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Signal logic**")
+    st.sidebar.markdown("""
+- 🟢 **BUY** — score ≥ 3 (strong bullish confluence)
+- 🔵 **WATCH** — score 1–2 (mild bullish lean)
+- 🟡 **HOLD** — score −1 to 0 (neutral)
+- 🔴 **SELL** — score ≤ −3 (strong bearish confluence)
+
+**Factors**: RSI · MACD · Bollinger Bands · SMA20/50 · Volume
+""")
+
+    if not selected:
+        st.info("Add tickers to your watchlist in the sidebar.")
+        return
+
+    # Summary stats row
+    results = {}
+    for ticker in selected:
+        df = fetch_data(ticker)
+        if df is not None:
+            results[ticker] = generate_signal(df)
+
+    if results:
+        buys = sum(1 for r in results.values() if r["signal"] == "BUY")
+        sells = sum(1 for r in results.values() if r["signal"] == "SELL")
+        watches = sum(1 for r in results.values() if r["signal"] == "WATCH")
+        holds = sum(1 for r in results.values() if r["signal"] == "HOLD")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Tickers", len(results))
+        m2.metric("🟢 Buy", buys)
+        m3.metric("🔵 Watch", watches)
+        m4.metric("🟡 Hold", holds)
+        m5.metric("🔴 Sell", sells)
+
+    st.markdown("---")
+
+    # Sort: BUY first, then WATCH, HOLD, SELL
+    order = {"BUY": 0, "WATCH": 1, "HOLD": 2, "SELL": 3}
+    sorted_results = sorted(results.items(), key=lambda x: order.get(x[1]["signal"], 99))
+
+    # Signal table header
+    col_ticker, col_signal, col_price, col_score = st.columns([2, 2, 2, 1])
+    col_ticker.markdown("**Ticker**")
+    col_signal.markdown("**Signal**")
+    col_price.markdown("**Price / Change**")
+    col_score.markdown("**Score**")
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    for ticker, result in sorted_results:
+        render_signal_card(ticker, result)
+
+    # Failed tickers
+    failed = [t for t in selected if t not in results]
+    if failed:
+        st.warning(f"Could not fetch data for: {', '.join(failed)}")
+
+    # Auto-refresh
+    if auto_refresh:
+        time.sleep(refresh_interval)
+        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
