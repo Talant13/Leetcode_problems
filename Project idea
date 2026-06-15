@@ -10,12 +10,20 @@ Add a pre-market forecast — based on overnight news and futures, tell me wheth
 End with a portfolio-level sentiment — overall bullish/bearish/neutral, biggest risk today, and one macro event to watch this week
 Deliver the full digest to my email every morning
 
-Output format per ticker:
-[TICKER] $price  [▲/▼ %change]  [⚠️ ANOMALY or ✅ Normal]
-What happened:   one sentence
-News impact:     High/Medium/Low — reason
-Watch for:       upcoming catalyst or risk
-Forecast:        Bullish/Bearish/Neutral — one sentence why
+AAPL  $189.42  ▲ 2.3%  ⚠️ ANOMALY
+
+What happened:  Apple surged on stronger-than-expected iPhone demand data
+News impact:    High — Bloomberg reported supply chain recovery (4h ago)
+Catalyst:       Earnings call Thursday after market close
+Risk:           Overbought RSI, broader tech sector weakness
+Forecast:       Bullish 🟢 (Medium confidence) — momentum supported 
+                by institutional buying pre-earnings
+━━━━━━━━━━━━━━━━━━━━━━━━
+PORTFOLIO DIGEST  |  Mon Jun 15
+Overall:      Bullish (6/9 tickers positive)
+Biggest risk: TSLA — no news catalyst, high volatility
+Macro watch:  CPI data release Wednesday 8:30am ET
+━━━━━━━━━━━━━━━━━━━━━━━━
 Rules you must follow as my guide:
 
 Use Claude Code — give me terminal commands, file names, and exact code to run
