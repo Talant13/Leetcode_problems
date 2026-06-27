@@ -58,3 +58,24 @@ news.py — Reuters scraper
 analyst.py — Claude analysis + ratings
 mailer.py — HTML email builder + sender
 main.py — orchestrates everything
+
+1. Volume
+2. MA 50 (Moving Average 50)
+3. MA 100 (Moving Average 100)
+4. MA 200 (Moving Average 200)
+5. VWAP
+6. Support / Resistance
+7. RSI (14)
+8. MACD
+9. ATR
+10. Relative Volume (RVOL)
+11. 52W High / 52W Low
+12. Market Cap
+13. P/E Ratio
+14. EPS
+15. Revenue Growth
+16. Free Cash Flow (FCF)
+17. Debt / Equity
+18. Earnings Date
+19. Insider Buying / Selling
+20. Short Interest
