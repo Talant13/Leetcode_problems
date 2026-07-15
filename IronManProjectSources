@@ -3,3 +3,58 @@ Ironman analysis
 https://github.com/sheldonsebastian/Ironman-Competition-Analysis/blob/master/Individual%20Datasets/im_australia_2005.csv
 
 https://sheldonsebastian.github.io/Ironman-Competition-Analysis/
+
+__________________
+Real problem: Billions in public contracts are awarded to politically connected vendors — but the data exists in fragmented, dirty formats nobody has cleaned.
+Ingest USAspending.gov contract awards. Clean and normalize vendor names (same company appears 50 ways). 
+Flag statistical anomalies: single-bid contracts, contracts awarded just below approval thresholds, same vendor winning repeatedly in one agency.
+Build a scoring model for "contracts worth investigating."
+
+usaspending.gov bulk download
+
+usaspending CSV (bulk download)
+    ↓
+DuckDB — bronze layerusaspending CSV (bulk download)
+    ↓
+DuckDB — bronze layer
+  - parse usaspending CSV (bulk download)
+    ↓
+DuckDB — bronze layer
+  - parse & type-cast ~100 columns
+  - deduplicate transactions
+    ↓
+DuckDB — silver layer
+  - normalize vendor names (fuzzy match with rapidfuzz)
+  - join agency reference tables
+  - flag: single-bid, just-under-threshold, repeat vendor
+    ↓
+Databricks Delta — gold layer
+  - anomaly scoring table
+  - historical SCD for vendor profiles
+    ↓
+Power BI / Tableau — final dashboard& type-cast ~100 columns
+  - deduplicate transactions
+    ↓
+DuckDB — silver layer
+  - normalize vendor names (fuzzy match with rapidfuzz)
+  - join agency reference tables
+  - flag: single-bid, just-under-threshold, repeat vendor
+    ↓
+Databricks Delta — gold layer
+  - anomaly scoring table
+  - historical SCD for vendor profiles
+    ↓
+Power BI / Tableau — final dashboard
+  - parse & type-cast ~100 columns
+  - deduplicate transactions
+    ↓
+DuckDB — silver layer
+  - normalize vendor names (fuzzy match with rapidfuzz)
+  - join agency reference tables
+  - flag: single-bid, just-under-threshold, repeat vendor
+    ↓
+Databricks Delta — gold layer
+  - anomaly scoring table
+  - historical SCD for vendor profiles
+    ↓
+Power BI / Tableau — final dashboard
