@@ -1,0 +1,146 @@
+"""
+my_first_agent.py — Build an AI agent FROM SCRATCH in ~130 lines.
+
+The whole idea of an "agent" is one loop:
+    REASON  -> the model thinks about what to do next
+    ACT     -> it calls a tool (a normal Python function)
+    OBSERVE -> we run the tool and hand the result back
+    ...repeat until the model says it's done.
+
+That loop is ALL an agent is. Everything else (frameworks, memory,
+multi-agent systems) is built on top of this. Read the comments top
+to bottom and you'll understand what's going on.
+
+SETUP (in your terminal):
+    pip install anthropic
+    export ANTHROPIC_API_KEY="sk-ant-..."   # get one at console.anthropic.com
+    python my_first_agent.py
+"""
+
+import json
+import datetime
+from anthropic import Anthropic
+
+client = Anthropic()  # reads ANTHROPIC_API_KEY from your environment automatically
+MODEL = "claude-sonnet-5"  # a good balance of smart + cheap for learning
+
+
+# ---------------------------------------------------------------------------
+# STEP 1 — DEFINE THE TOOLS (just normal Python functions)
+# ---------------------------------------------------------------------------
+# An LLM alone can't reliably do math or know today's date. Tools give it
+# those abilities. A "tool" is nothing magical: it's a Python function plus
+# a description telling the model when and how to call it.
+
+def calculator(expression: str) -> str:
+    """Evaluate a basic math expression like '84.50 * 0.15'."""
+    # (eval is fine for a learning demo; never eval untrusted input in prod)
+    return str(eval(expression, {"__builtins__": {}}, {}))
+
+def days_until(date: str) -> str:
+    """Return the number of days from today until a YYYY-MM-DD date."""
+    target = datetime.date.fromisoformat(date)
+    return str((target - datetime.date.today()).days)
+
+# Map tool names -> the actual functions, so we can call them by name later.
+TOOL_FUNCTIONS = {
+    "calculator": calculator,
+    "days_until": days_until,
+}
+
+# STEP 2 — DESCRIBE THE TOOLS FOR THE MODEL
+# This is the "menu" the model reads to decide what to call. Each tool needs
+# a name, a plain-English description, and an input_schema (JSON Schema)
+# telling the model exactly what arguments to send.
+TOOLS = [
+    {
+        "name": "calculator",
+        "description": "Evaluate a math expression. Use for ANY arithmetic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {"type": "string", "description": "e.g. '84.5 * 0.15'"}
+            },
+            "required": ["expression"],
+        },
+    },
+    {
+        "name": "days_until",
+        "description": "How many days from today until a given date.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "target date as YYYY-MM-DD"}
+            },
+            "required": ["date"],
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# STEP 3 — THE AGENT LOOP (this is the heart of everything)
+# ---------------------------------------------------------------------------
+def run_agent(user_question: str):
+    # `messages` is the conversation history. We keep appending to it so the
+    # model always sees everything that has happened so far. This list IS the
+    # agent's short-term memory.
+    messages = [{"role": "user", "content": user_question}]
+
+    step = 0
+    while True:  # keep looping until the model stops asking for tools
+        step += 1
+
+        # --- REASON: ask the model what to do next ---
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=TOOLS,          # <-- giving the model its tool menu
+            messages=messages,
+        )
+
+        # Print any thinking/text the model produced this turn.
+        for block in response.content:
+            if block.type == "text":
+                print(f"\n[step {step}] 🧠 Claude says: {block.text}")
+
+        # Save the model's full turn (text + any tool requests) to history.
+        messages.append({"role": "assistant", "content": response.content})
+
+        # `stop_reason == "tool_use"` means: "I want to call a tool, run it
+        # and give me the result." Anything else means the model is DONE.
+        if response.stop_reason != "tool_use":
+            final = "".join(b.text for b in response.content if b.type == "text")
+            print(f"\n✅ FINAL ANSWER: {final}")
+            return final
+
+        # --- ACT + OBSERVE: run each requested tool, collect results ---
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                fn = TOOL_FUNCTIONS[block.name]        # look up the function
+                result = fn(**block.input)             # ACT: actually run it
+                print(f"[step {step}] 🔧 called {block.name}({block.input}) -> {result}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,           # ties result to the request
+                    "content": result,
+                })
+
+        # Feed the tool results back in as a new user turn. The loop repeats,
+        # and now the model can reason WITH the results it just got.
+        messages.append({"role": "user", "content": tool_results})
+
+
+# ---------------------------------------------------------------------------
+# STEP 4 — RUN IT
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    # This question forces TWO tool calls (a date calc + a math calc) plus
+    # reasoning to combine them — so you see the loop run multiple times.
+    question = (
+        "How many days until 2027-01-01, and separately, "
+        "what is a 15% tip on a $84.50 bill? Give both answers clearly."
+    )
+    print(f"❓ QUESTION: {question}")
+    run_agent(question)
