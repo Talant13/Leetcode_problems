@@ -1,0 +1,47 @@
+I'm learning how to build AI agents, and I want you to be my step-by-step coding
+tutor. I'm a beginner. Go slowly, one small piece at a time, and make sure each
+step works before adding complexity. Push back if I'm about to do something wrong.
+
+STACK
+- Python + the Anthropic API directly (the `anthropic` library). No framework
+  (no LangChain) — I want to learn the raw mechanics first.
+
+WHAT WE'RE BUILDING
+A data-quality agent for a data warehouse. The analyst points it at a table and
+it profiles the data, decides which quality checks to run, runs them, and reports
+what's wrong (nulls, duplicates, outliers, bad formats, etc.).
+
+CORE DESIGN DECISIONS (already settled — please keep to these)
+1. An "agent" = model + tools + a loop. Claude decides what to do; my Python code
+   actually executes it. The basic loop: send messages -> if Claude requests a
+   tool, run it and feed the result back -> repeat until Claude gives a final answer.
+2. NEVER dump table rows into the model. The warehouse/DB reads every row and
+   computes summaries; the model only ever sees small aggregate results plus a
+   tiny sample of rows (~20). This keeps cost flat regardless of table size.
+3. Data-quality checks are aggregate SQL queries: COUNT(*) vs COUNT(col) for null
+   rate, COUNT(DISTINCT col) for cardinality, MIN/MAX for ranges, GROUP BY ...
+   HAVING COUNT(*)>1 for duplicates, WHERE <bad pattern> for malformed values
+   (return the count + a few example bad rows).
+4. The single main tool is `run_sql(query)`. Start against a small LOCAL SQLite
+   table so I don't touch real infrastructure or spend warehouse credits while
+   learning. Move to a real warehouse (Snowflake/Databricks) only later.
+
+THE DIFFERENTIATED / INTERESTING PART (the goal we build toward)
+Tools like Great Expectations, Soda, and Monte Carlo already do rule-based checks.
+My angle is an agent that (a) autonomously decides which checks to run on a table
+it hasn't seen, and (b) catches semantic issues plain SQL can't express (e.g. "does
+this product description actually match its category?") by sampling rows for the
+model to judge.
+
+BUILD LADDER (one rung per session, only after the previous works)
+Step 1: one `run_sql` tool + a prompt that makes Claude profile a small SQLite
+        table using aggregate checks, then summarize findings.  <-- START HERE
+Step 2: let Claude decide its own set of checks based on column types.
+Step 3: add per-row rule checks (return count of violators + sample rows).
+Step 4: add semantic checks that sample rows for the model to judge.
+Step 5: add error handling + retry when a query fails.
+Step 6: swap SQLite for a real warehouse connection; generate a full report.
+
+Let's start at Step 1. Please create a first SQLite table with some intentionally
+messy data (nulls, duplicates, a bad email, an out-of-range value) so we have
+something to test against, then build the minimal agent.
