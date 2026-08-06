@@ -1,0 +1,33 @@
+
+with tab1 as
+(select CASE EXTRACT(MONTH FROM s.sale_date)
+        WHEN 12 THEN 'Winter' WHEN 1 THEN 'Winter' WHEN 2 THEN 'Winter'
+        WHEN 3 THEN 'Spring' WHEN 4 THEN 'Spring' WHEN 5 THEN 'Spring'
+        WHEN 6 THEN 'Summer' WHEN 7 THEN 'Summer' WHEN 8 THEN 'Summer'
+        WHEN 9 THEN 'Fall' WHEN 10 THEN 'Fall' WHEN 11 THEN 'Fall'
+       END AS season,
+       p.category,
+       sum(s.quantity) as popularity,
+       sum(s.quantity * s.price) as revenue
+  from sales s
+  join products p on p.product_id = s.product_id
+  group by CASE EXTRACT(MONTH FROM s.sale_date)
+        WHEN 12 THEN 'Winter' WHEN 1 THEN 'Winter' WHEN 2 THEN 'Winter'
+        WHEN 3 THEN 'Spring' WHEN 4 THEN 'Spring' WHEN 5 THEN 'Spring'
+        WHEN 6 THEN 'Summer' WHEN 7 THEN 'Summer' WHEN 8 THEN 'Summer'
+        WHEN 9 THEN 'Fall' WHEN 10 THEN 'Fall' WHEN 11 THEN 'Fall'
+       END,
+       p.category
+), tab2 as (
+select t.season,
+        t.category,
+        t.popularity,
+        t.revenue,
+        dense_rank()over(partition by season order by popularity desc, revenue desc) as rnk
+   from tab1 t
+)select season,
+        category,
+        popularity as total_quantity,
+        revenue as total_revenue
+   from tab2 where rnk = 1
+   order by season asc
