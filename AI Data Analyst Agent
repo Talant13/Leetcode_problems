@@ -1,0 +1,30 @@
+Project: AI Data Analyst Agent (learning project)
+Goal
+
+A web app where a user uploads a data file, the agent profiles it, asks a few clarifying questions, then produces charts, insights and recommendations.
+
+Scope
+Version 1: CSV only, one file, one user, runs locally.
+Version 2: Add JSON and Parquet.
+Later: Excel and Word (Word tables are the hardest part).
+Out of scope for now: logins, payments, multi-user storage, live database connections.
+Stack
+Python 3.11+
+Streamlit for the UI
+DuckDB and pandas for reading and analyzing data
+Plotly for charts
+Claude API (or OpenAI) for the AI steps
+A .env file for the API key (never commit it)
+Core rule
+
+The AI never calculates numbers itself. It writes code or SQL, your program runs it, and the results come from that output.
+
+Workflow
+Upload: The user uploads a file, and the app reads it into a DataFrame.
+Profile (plain code, no AI): For each column, record type, missing %, unique count, min/max, and sample values. Also check for duplicate rows and obvious outliers.
+Understand (AI): Send only the profile and about 5 sample rows, not the full data. The AI returns JSON: a guess of what each column means, plus any unclear points.
+Clarify (AI + user): The app shows at most 3-4 questions (e.g., “Is amount revenue or cost?”). The answers are saved as a “context” dictionary.
+Analyze (AI writes code): The AI gets the profile and context, and returns SQL or Python. The app runs it in a restricted environment and captures the results.
+Visualize: The app draws 3-5 charts from the results.
+Verify: Check that totals match the original file, and flag any mismatch to the user.
+Recommend (AI): Give the AI the verified results and ask for insights, risks, and where to focus. Show the assumptions used.
